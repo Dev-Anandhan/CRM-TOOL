@@ -1,0 +1,74 @@
+{
+  "name": "ShadowLens DLQ Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "shadowlens-audit-ingest",
+        "httpMethod": "POST",
+        "responseMode": "lastNode"
+      },
+      "id": "Webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ShadowLens - Event Processor with DLQ & Retry Logic\n// Requirement 1: Compliance & Business Reality (3 retries before DLQ)\n// Requirement 2: Observability (Append exact error, timestamp, and retry count)\n// Requirement 3: Replayability (Output split 2 arrays: [0] Success, [1] DLQ nested payload)\n\nconst successItems = [];\nconst dlqItems = [];\nconst MAX_RETRIES = 3;\n\n// Simulate validation of privacy consent logs\nfunction processPayload(payload) {\n  if (!payload.userId || !payload.consentState || payload.simulateFail === true) {\n      throw new Error('Validation Failed: Missing critical fields (userId, consentState) or corrupted data payload.');\n  }\n  // Return successfully processed log\n  return { \n    ...payload, \n    processedAt: new Date().toISOString(), \n    status: 'success' \n  };\n}\n\n// Map through all incoming batch items\nfor (const item of $input.all()) {\n  const payload = item.json;\n  \n  let retryCount = 0;\n  let processingSuccess = false;\n  let lastError = null;\n\n  // Attempt processing, allowing up to MAX_RETRIES\n  while (retryCount < MAX_RETRIES && !processingSuccess) {\n    try {\n      const processedData = processPayload(payload);\n      \n      // If successful, queue for array [0]\n      successItems.push({ json: processedData });\n      processingSuccess = true;\n    } catch (error) {\n      retryCount++;\n      lastError = error;\n      // Loop continues if retryCount < MAX_RETRIES\n    }\n  }\n\n  // If still failing after MAX_RETRIES, send to DLQ\n  if (!processingSuccess) {\n    dlqItems.push({\n      json: {\n        errorContext: {\n          errorMessage: lastError.message,\n          timestamp: new Date().toISOString(),\n          retryCount: retryCount,\n        },\n        // The original payload remains unmodified for clean replayability!\n        originalPayload: payload\n      }\n    });\n  }\n}\n\n// Cleanly separate outputs: \n// main[0][0] -> Success Database\n// main[0][1] -> Quarantine Database\nreturn [successItems, dlqItems];"
+      },
+      "id": "DLQ Processor Node",
+      "name": "DLQ Processor Node",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {},
+      "id": "Success Database",
+      "name": "Success Database",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [760, 200]
+    },
+    {
+      "parameters": {},
+      "id": "Quarantine Database",
+      "name": "Quarantine Database",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [760, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "DLQ Processor Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DLQ Processor Node": {
+      "main": [
+        [
+          {
+            "node": "Success Database",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quarantine Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

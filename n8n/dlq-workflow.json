@@ -1,0 +1,117 @@
+{
+  "name": "DLQ Routing Workflow (Plan B - Bulletproof)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "dlq-webhook",
+        "httpMethod": "POST",
+        "responseMode": "lastNode"
+      },
+      "id": "webhook-node",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  const data = item.json;\n\n  // 1. Tag the items as 'true' or 'false'\n  if (data.user_id && data.error_flag !== true) {\n    item.json.is_valid = true;\n  } else {\n    item.json.is_valid = false;\n    \n    // 2. Add DLQ metadata\n    item.json._dlq_reason = 'Invalid Data Entry: Missing ID or error flagged';\n    item.json._quarantined_at = new Date().toISOString();\n  }\n}\n\n// 3. Return everything through ONE branch\nreturn $input.all();"
+      },
+      "id": "code-node",
+      "name": "Processor Code",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-node",
+      "name": "Verify Logic",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "success-node",
+      "name": "Success Database",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        750,
+        200
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "quarantine-node",
+      "name": "Quarantine Database",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        750,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Processor Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processor Code": {
+      "main": [
+        [
+          {
+            "node": "Verify Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Logic": {
+      "main": [
+        [
+          {
+            "node": "Success Database",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quarantine Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
